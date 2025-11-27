@@ -334,16 +334,29 @@ app.get("/appointments", auth, async (req, res) => {
 app.post("/appointments", auth, async (req, res) => {
   const me = (req as any).user as JwtUser;
 
+  // Normaliza fecha/hora: acepta dateISO o alias comunes (slot/dateTime o date+time)
+  const raw = req.body as any;
+  const normalizedDateISO =
+    (typeof raw?.dateISO === "string" && raw.dateISO.trim()) ||
+    (typeof raw?.slot === "string" && raw.slot.trim()) ||
+    (typeof raw?.dateTime === "string" && raw.dateTime.trim()) ||
+    (raw?.date && raw?.time ? dayjs(`${raw.date}T${raw.time}`).toISOString() : undefined);
+
   const body = z
     .object({
       vetId: z.string(),
       dateISO: z.string(),
       reason: z.string().min(2),
     })
-    .safeParse(req.body);
+    .safeParse({ ...raw, dateISO: normalizedDateISO });
 
-  if (!body.success)
-    return res.status(400).json({ error: body.error.flatten() });
+  if (!body.success) {
+    const first = body.error.issues[0];
+    // Mensaje claro en español para fecha/hora faltante
+    if (first?.path?.[0] === "dateISO")
+      return res.status(400).json({ error: "Fecha/hora requerida" });
+    return res.status(400).json({ error: zodErrMsg(body.error) });
+  }
 
   if (dayjs(body.data.dateISO).isBefore(dayjs())) {
     return res.status(400).json({ error: "No se puede agendar en el pasado" });
@@ -363,6 +376,14 @@ app.post("/appointments", auth, async (req, res) => {
 
 // Reception/Admin create appointment for any user by email
 app.post("/manage/appointments", auth, requireRole([Role.ADMIN, Role.RECEPCIONISTA]), async (req, res) => {
+  // Normaliza fecha/hora: acepta dateISO o alias comunes (slot/dateTime o date+time)
+  const raw = req.body as any;
+  const normalizedDateISO =
+    (typeof raw?.dateISO === "string" && raw.dateISO.trim()) ||
+    (typeof raw?.slot === "string" && raw.slot.trim()) ||
+    (typeof raw?.dateTime === "string" && raw.dateTime.trim()) ||
+    (raw?.date && raw?.time ? dayjs(`${raw.date}T${raw.time}`).toISOString() : undefined);
+
   const body = z
     .object({
       userEmail: z.string({ required_error: "Correo del cliente es requerido" }).email("Correo electrónico inválido"),
@@ -370,8 +391,12 @@ app.post("/manage/appointments", auth, requireRole([Role.ADMIN, Role.RECEPCIONIS
       dateISO: z.string({ required_error: "Fecha/hora requerida" }),
       reason: z.string().min(2, "Motivo inválido"),
     })
-    .safeParse(req.body);
-  if (!body.success) return res.status(400).json({ error: zodErrMsg(body.error) });
+    .safeParse({ ...raw, dateISO: normalizedDateISO });
+
+  if (!body.success) {
+    const msg = zodErrMsg(body.error);
+    return res.status(400).json({ error: msg || "Datos inválidos" });
+  }
   if (dayjs(body.data.dateISO).isBefore(dayjs())) {
     return res.status(400).json({ error: "No se puede agendar en el pasado" });
   }
